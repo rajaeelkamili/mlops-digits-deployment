@@ -6,6 +6,10 @@ en continu, prêt à répondre à des requêtes -- c'est ce qui permet à
 n'importe quelle application (web, mobile) de l'utiliser.
 """
 
+import json
+import os
+from pathlib import Path
+
 import mlflow
 import torch
 import torch.nn as nn
@@ -41,23 +45,41 @@ class SimpleCNN(nn.Module):
         return self.fc2(x)
 
 
-# On charge UN modèle spécifique par son run_id -- pas "le dernier entraîné au hasard".
-# C'est la traçabilité : on sait exactement quelle version tourne en prod.
-# Remplace ce run_id par celui affiché à la fin de train_tracked.py.
-RUN_ID = "0b53c78eb7d04419987b5d64eaddc8cd"
+# Par défaut, on charge models/best_model.pt (versionné dans Git, donc portable :
+# fonctionne après un simple `git clone`, et dans Docker). Les métadonnées
+# (run_id MLflow, accuracy) sont dans models/best_model.json : on sait toujours
+# quelle version tourne.
+# Pour charger un autre run directement depuis MLflow (traçabilité totale) :
+#     MODEL_RUN_ID=<run_id> uvicorn serve:app
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+MODEL_RUN_ID = os.environ.get("MODEL_RUN_ID")
+
+RUN_ID = MODEL_RUN_ID or "unknown"
+MODEL_META = {}
 
 model = None  # chargé au démarrage (voir startup event ci-dessous)
 
 
 @app.on_event("startup")
 def load_model():
-    global model
-    client = mlflow.tracking.MlflowClient()
-    local_path = client.download_artifacts(RUN_ID, "model_state.pt")
+    global model, RUN_ID, MODEL_META
+    if MODEL_RUN_ID:
+        local_path = mlflow.tracking.MlflowClient().download_artifacts(MODEL_RUN_ID, "model_state.pt")
+    else:
+        local_path = MODELS_DIR / "best_model.pt"
+        meta_path = MODELS_DIR / "best_model.json"
+        if not local_path.exists():
+            raise RuntimeError(
+                f"{local_path} introuvable : lance d'abord `python train_tracked.py` "
+                "(il exporte le meilleur modèle dans models/)."
+            )
+        if meta_path.exists():
+            MODEL_META = json.loads(meta_path.read_text(encoding="utf-8"))
+            RUN_ID = MODEL_META.get("run_id", "unknown")
     model = SimpleCNN()
     model.load_state_dict(torch.load(local_path, weights_only=True))
     model.eval()
-    print(f"Modèle chargé depuis le run {RUN_ID}")
+    print(f"Modèle chargé (run {RUN_ID})")
 
 
 # Pydantic valide automatiquement la requête -- si le format est incorrect,
@@ -77,7 +99,7 @@ class PredictionOutput(BaseModel):
 @app.get("/")
 def health_check():
     """Endpoint de santé -- vérifie que l'API tourne et que le modèle est chargé."""
-    return {"status": "ok", "model_loaded": model is not None, "run_id": RUN_ID}
+    return {"status": "ok", "model_loaded": model is not None, "run_id": RUN_ID, "test_accuracy": MODEL_META.get("test_accuracy")}
 
 
 @app.post("/predict", response_model=PredictionOutput)
