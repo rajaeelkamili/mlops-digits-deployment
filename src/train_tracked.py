@@ -17,6 +17,13 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 import numpy as np
+import json
+import random
+import shutil
+from pathlib import Path
+
+SEED = 42
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 mlflow.set_tracking_uri("sqlite:///../mlflow.db")
 mlflow.set_experiment("digits-classifier")
@@ -41,6 +48,11 @@ class SimpleCNN(nn.Module):
 
 
 def train_and_log(epochs=15, lr=0.001, batch_size=32):
+    # Graine fixée : un même run redonne (à peu près) le même résultat.
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+
     digits = load_digits()
     X = digits.images.reshape(-1, 1, 8, 8).astype(np.float32) / 16.0
     y = digits.target
@@ -98,20 +110,41 @@ def train_and_log(epochs=15, lr=0.001, batch_size=32):
         print(f"Run enregistré : {run_id}")
         print(f"Test accuracy  : {accuracy:.3f}")
 
+    return run_id, accuracy, {"epochs": epochs, "lr": lr, "batch_size": batch_size}
+
+
+def export_best(runs):
+    """Copie le meilleur modèle dans models/ : c'est CE fichier que l'API charge par défaut.
+
+    Les artifacts MLflow gardent des chemins absolus (propres à ta machine) ; un
+    dossier models/ versionné dans Git fonctionne partout, y compris dans Docker.
+    """
+    run_id, accuracy, params = max(runs, key=lambda r: r[1])
+    client = mlflow.tracking.MlflowClient()
+    src = client.download_artifacts(run_id, "model_state.pt")
+    MODELS_DIR.mkdir(exist_ok=True)
+    shutil.copy(src, MODELS_DIR / "best_model.pt")
+    (MODELS_DIR / "best_model.json").write_text(
+        json.dumps({"run_id": run_id, "test_accuracy": round(accuracy, 4), "params": params, "seed": SEED}, indent=2),
+        encoding="utf-8",
+    )
     return run_id, accuracy
 
 
 if __name__ == "__main__":
     # On lance plusieurs runs avec des hyperparamètres différents
     # -- exactement ce qu'on ferait pour chercher la meilleure config.
+    runs = []
     print("=== Run 1 : baseline ===")
-    train_and_log(epochs=10, lr=0.001)
+    runs.append(train_and_log(epochs=10, lr=0.001))
 
     print("\n=== Run 2 : plus d'epochs ===")
-    train_and_log(epochs=20, lr=0.001)
+    runs.append(train_and_log(epochs=20, lr=0.001))
 
     print("\n=== Run 3 : learning rate plus élevé ===")
-    run_id, acc = train_and_log(epochs=15, lr=0.003)
+    runs.append(train_and_log(epochs=15, lr=0.003))
 
-    print(f"\nMeilleur run à déployer (exemple) : {run_id} avec {acc:.3f} accuracy")
+    run_id, acc = export_best(runs)
+    print(f"\nMeilleur run : {run_id} avec {acc:.3f} accuracy")
+    print("Modèle exporté dans models/best_model.pt (chargé par défaut par serve.py).")
     print("Lance `mlflow ui --backend-store-uri sqlite:///../mlflow.db` pour comparer tous les runs visuellement.")

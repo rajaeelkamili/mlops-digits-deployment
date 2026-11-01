@@ -1,0 +1,6 @@
+# Généré par train_tracked.py (les modèles utiles sont exportés dans models/)
+mlflow.db
+src/mlruns/
+src/model_state.pt
+__pycache__/
+*.pyc
