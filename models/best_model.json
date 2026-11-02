@@ -1,0 +1,10 @@
+{
+  "run_id": "8ee456cbe53f43198f7158ce5f63996b",
+  "test_accuracy": 0.9833,
+  "params": {
+    "epochs": 15,
+    "lr": 0.003,
+    "batch_size": 32
+  },
+  "seed": 42
+}

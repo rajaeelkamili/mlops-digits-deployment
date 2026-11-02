@@ -8,9 +8,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Puis le reste du projet (code + mlflow.db + mlruns contenant le modèle)
+# Puis le code et le modèle exporté (models/best_model.pt)
 COPY src/ ./src/
-COPY mlflow.db .
+COPY models/ ./models/
 
 WORKDIR /app/src
 
